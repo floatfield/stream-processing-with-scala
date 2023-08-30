@@ -20,6 +20,14 @@ project/plugins/project/
 *.class
 *.log
 
+### metals + vscode
+.metals/
+.vscode/
+.bloop/
+project/.bloop
+project/metals.sbt
+project/project/
+
 # End of https://www.toptal.com/developers/gitignore/api/scala,sbt
 
 data/

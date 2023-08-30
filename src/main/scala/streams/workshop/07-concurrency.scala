@@ -5,13 +5,26 @@ import zio.duration._
 import zio.stream._
 import java.nio.file.Path
 import zio.duration.Duration
+import scala.io.Source
 
 object ControlFlow {
   // 1. Write a stream that reads bytes from one file,
   // then prints "Done reading 1", then reads another bytes
   // from another file.
-  def bytesFromHereAndThere(here: Path, there: Path, bytesAmount: Int): ZStream[???, ???, Byte] =
-    ???
+  def bytesFromHereAndThere(here: Path, there: Path, bytesAmount: Int): ZStream[console.Console, Throwable, Char] =
+    ZStream
+      .bracket(ZIO(Source.fromFile(here.toAbsolutePath.toFile)))(fr => UIO(fr.close()))
+      .flatMap(fr =>
+        ZStream.fromEffectOption(
+          for {
+            arr       <- UIO(Array.ofDim[Char](bytesAmount))
+            charsRead <- Task(fr.reader().read(arr)).mapError(Option(_))
+            res       <- if (charsRead == -1) ZIO.fail(None) else ZIO.succeed(Chunk.fromArray(arr))
+          } yield res
+        )
+      )
+      .flattenChunks
+      .tap(c => console.putStr(c.toString))
 
   // 2. What would be the difference in output between these two streams?
   val output1 =

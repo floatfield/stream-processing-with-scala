@@ -5,17 +5,17 @@ import zio.stream._
 object UnderTheHood {
   // 1. Translate the following interface to ZIO.
   trait Iter[A] {
-    def next: A
+    def next: ZStream[Any, Throwable, A]
   }
 
   // 2. Translate the following iterator transformation to ZIO.
   def zipWithIndex[A](it: Iter[A]): Iter[(A, Int)] =
     new Iter[(A, Int)] {
       var nextIdx: Int = 0
-      def next: (A, Int) = {
-        val idx = nextIdx
+      def next: ZStream[Any, Throwable, (A, Int)] = {
         nextIdx += 1
-        (it.next, idx)
+        val nextEl = it.next
+        nextEl.map(elem => (elem, nextIdx))
       }
     }
 
