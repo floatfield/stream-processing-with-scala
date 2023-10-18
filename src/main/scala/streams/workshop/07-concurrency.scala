@@ -1,39 +1,37 @@
 package streams.workshop
 
-import zio._
-import zio.duration._
 import zio.stream._
 import java.nio.file.Path
-import zio.duration.Duration
 import scala.io.Source
+import zio._
 
 object ControlFlow {
   // 1. Write a stream that reads bytes from one file,
   // then prints "Done reading 1", then reads another bytes
-  // from another file.
-  def bytesFromHereAndThere(here: Path, there: Path, bytesAmount: Int): ZStream[console.Console, Throwable, Char] =
+  //z/ from another file.
+  def bytesFromHereAndThere(here: Path, bytesAmount: Int): ZStream[Console, Throwable, Char] =
     ZStream
-      .bracket(ZIO(Source.fromFile(here.toAbsolutePath.toFile)))(fr => UIO(fr.close()))
+      .acquireReleaseWith(ZIO.succeed(Source.fromFile(here.toAbsolutePath.toFile)))(fr => ZIO.succeed(fr.close()))
       .flatMap(fr =>
-        ZStream.fromEffectOption(
+        ZStream.fromZIOOption(
           for {
-            arr       <- UIO(Array.ofDim[Char](bytesAmount))
-            charsRead <- Task(fr.reader().read(arr)).mapError(Option(_))
+            arr       <- ZIO.succeed(Array.ofDim[Char](bytesAmount))
+            charsRead <- ZIO.attempt(fr.reader().read(arr)).mapError(Option(_))
             res       <- if (charsRead == -1) ZIO.fail(None) else ZIO.succeed(Chunk.fromArray(arr))
           } yield res
         )
       )
       .flattenChunks
-      .tap(c => console.putStr(c.toString))
+      .tap(c => Console.print(c.toString))
 
   // 2. What would be the difference in output between these two streams?
   val output1 =
-    ZStream("Hello", "World").tap(console.putStrLn(_)).drain ++
-      ZStream.fromEffect(console.putStrLn("Done printing!")).drain
+    ZStream("Hello", "World").tap(Console.printLine(_)).drain ++
+      ZStream.fromZIO(Console.printLine("Done printing!")).drain
 
   val output2 =
-    ZStream("Hello", "World").tap(console.putStrLn(_)).drain *>
-      ZStream.fromEffect(console.putStrLn("Done printing!")).drain
+    ZStream("Hello", "World").tap(Console.printLine(_)).drain *>
+      ZStream.fromZIO(Console.printLine("Done printing!")).drain
 
   // 3. Read 4 paths from the user. For every path input, read the file in its entirety
   // and print it out. Once done printing it out, log the file name in a `Ref` along with
@@ -45,36 +43,36 @@ object ControlFlow {
 object StreamErrorHandling {
   // 1. Modify this stream, which is under our control, to survive transient exceptions.
   trait TransientException { self: Exception => }
-  def query: RIO[random.Random, Int] = random.nextIntBetween(0, 11).flatMap { n =>
-    if (n < 2) Task.fail(new RuntimeException("Unrecoverable"))
-    else if (n < 6) Task.fail(new RuntimeException("recoverable") with TransientException)
-    else Task.succeed(n)
+  def query: RIO[Random, Int] = Random.nextIntBetween(0, 11).flatMap { n =>
+    if (n < 2) ZIO.fail(new RuntimeException("Unrecoverable"))
+    else if (n < 6) ZIO.fail(new RuntimeException("recoverable") with TransientException)
+    else ZIO.succeed(n)
   }
 
-  val queryResults: ZStream[random.Random, Throwable, Int] = ZStream.repeatEffect(query) ?
+  val queryResults: ZStream[Random, Throwable, Int] = ZStream.repeatZIO(query) ?
 
   // 2. Apply retries to the transformation applied during this stream.
-  type Lookup = Has[Lookup.Service]
+  type Lookup = Lookup.Service
   object Lookup {
     trait Service {
       def lookup(i: Int): Task[String]
     }
 
-    def lookup(i: Int): RIO[Lookup, String] = ZIO.accessM[Lookup](_.get.lookup(i))
+    def lookup(i: Int): RIO[Lookup, String] = ZIO.environmentWithZIO[Lookup](_.get.lookup(i))
 
     def live: ZLayer[Any, Nothing, Lookup] =
       ZLayer.succeed { i =>
-        if (i < 5) Task.fail(new RuntimeException("Lookup failure"))
-        else Task.succeed("Lookup result")
+        if (i < 5) ZIO.fail(new RuntimeException("Lookup failure"))
+        else ZIO.succeed("Lookup result")
       }
   }
 
-  val queryResultsTransformed: ZStream[random.Random with Lookup, Throwable, Int] =
-    ZStream.repeatEffect(query).mapM(i => Lookup.lookup(i).map((i, _))) ?
+  val queryResultsTransformed: ZStream[Random with Lookup, Throwable, Int] =
+    ZStream.repeatZIO(query).mapZIO(i => Lookup.lookup(i).map((i, _))) ?
 
   // 3. Switch to another stream once the source fails in this stream.
   val failover: ZStream[Any, ???, ???] =
-    ZStream(ZIO.succeed(1), ZIO.fail("Boom")).mapM(identity) ?
+    ZStream(ZIO.succeed(1), ZIO.fail("Boom")).mapZIO(identity) ?
 
   // 4. Do the same, but when the source fails, print out the failure and switch
   // to the stream specified in the failure.
@@ -94,7 +92,7 @@ object StreamErrorHandling {
 
   // 8. Use catchAll to restart this stream, without re-acquiring the resource.
   val subsection = ZStream
-    .bracket(console.putStrLn("Acquiring"))(_ => console.putStrLn("Releasing"))
+    .acquireReleaseWith(Console.printLine("Acquiring"))(_ => Console.printLine("Releasing").orDie)
     .flatMap(_ => ZStream(ZIO.succeed(1), ZIO.fail("Boom")))
 }
 
@@ -139,7 +137,7 @@ object Concurrency {
   // 10. Use timeoutTo to avoid the delay embedded in this stream and replace the last
   // element with "<TIMEOUT>"
   val csvData = (ZStream("symbol,price", "AAPL,500") ++
-    ZStream.fromEffect(clock.sleep(30.seconds)).drain ++
+    ZStream.fromZIO(Clock.sleep(30.seconds)).drain ++
     ZStream("AAPL,501")) ?
 
   // 11. Generate 3 random prices with a 5 second delay between each price
@@ -148,44 +146,44 @@ object Concurrency {
 
   // 12. Regulate the output of this infinite stream of records to emit records
   // on exponentially rising intervals, from 50 millis up to a maximum of 5 seconds.
-  def pollSymbolQuote(symbol: String): URIO[random.Random, (String, Double)] =
-    random.nextDoubleBetween(0.1, 0.5).map((symbol, _))
-  val regulated = ZStream.repeatEffect(pollSymbolQuote("V")) ?
+  def pollSymbolQuote(symbol: String): URIO[Random, (String, Double)] =
+    Random.nextDoubleBetween(0.1, 0.5).map((symbol, _))
+  val regulated = ZStream.repeatZIO(pollSymbolQuote("V")) ?
 
   // 13. Introduce a parallel db writing operator in this stream. Handle up to
   // 5 records in parallel.
   case class Record(value: String)
-  def writeRecord(record: Record): RIO[clock.Clock with console.Console, Unit] =
-    console.putStrLn(s"Writing ${record}") *> clock.sleep(1.second)
+  def writeRecord(record: Record): RIO[Clock with Console, Unit] =
+    Console.printLine(s"Writing ${record}") *> Clock.sleep(1.second)
 
-  val dbWriter = ZStream.repeatEffect(random.nextString(5).map(Record(_))) ?
+  val dbWriter = ZStream.repeatZIO(Random.nextString(5).map(Record(_))) ?
 
   // 14. Test what happens when one of the parallel operations encounters an error.
   val whatHappens =
     ZStream(
-      clock.sleep(5.seconds).onExit(ex => console.putStrLn(s"First element exit: ${ex.toString}")),
-      clock.sleep(5.seconds).onExit(ex => console.putStrLn(s"Second element exit: ${ex.toString}")),
-      clock.sleep(1.second) *> ZIO.fail("Boom")
-    ).mapMPar(3)(identity)
+      Clock.sleep(5.seconds).onExit(ex => Console.printLine(s"First element exit: ${ex.toString}").orDie),
+      Clock.sleep(5.seconds).onExit(ex => Console.printLine(s"Second element exit: ${ex.toString}").orDie),
+      Clock.sleep(1.second) *> ZIO.fail("Boom")
+    ).mapZIOPar(3)(identity(_))
 }
 
 object StreamComposition {
   // 1. Merge these two streams.
-  val one    = ZStream.repeatWith("left", Schedule.fixed(1.second).jittered)
-  val two    = ZStream.repeatWith("right", Schedule.fixed(500.millis).jittered)
+  val one    = ZStream.repeatWithSchedule("left", Schedule.fixed(1.second).jittered)
+  val two    = ZStream.repeatWithSchedule("right", Schedule.fixed(500.millis).jittered)
   val merged = ???
 
   // 2. Merge `one` and `two` above with the third stream here:
-  val three       = ZStream.repeatWith("middle", Schedule.fixed(750.millis).jittered)
+  val three       = ZStream.repeatWithSchedule("middle", Schedule.fixed(750.millis).jittered)
   val threeMerges = ???
 
   // 3. Emulate drainFork with mergeTerminateLeft.
   val emulation: ??? =
     ZStream
-      .bracket(Queue.bounded[Long](16))(_.shutdown)
+      .acquireReleaseWith(Queue.bounded[Long](16))(_.shutdown)
       .flatMap { queue =>
-        val writer = ZStream.repeatEffectWith(clock.nanoTime >>= queue.offer, Schedule.fixed(1.second))
-        val reader = ZStream.fromQueue(queue).tap(l => console.putStrLn(l.toString))
+        val writer = ZStream.repeatZIOWithSchedule(Clock.nanoTime flatMap queue.offer, Schedule.fixed(1.second))
+        val reader = ZStream.fromQueue(queue).tap(l => Console.printLine(l.toString))
 
         val (_, _) = (writer, reader)
 
@@ -215,17 +213,17 @@ object StreamComposition {
   // 9. Run a variable number of background streams (according to the parameter) that
   // perform monitoring. They should interrupt the foreground fiber doing the processing.
   def doMonitor(id: Int) =
-    ZStream.repeatEffectWith(
-      random.nextIntBetween(1, 11).flatMap { i =>
-        if (i < 8) console.putStrLn(s"Monitor OK from ${id}")
-        else Task.fail(new RuntimeException(s"Monitor ${id} failed!"))
+    ZStream.repeatZIOWithSchedule(
+      Random.nextIntBetween(1, 11).flatMap { i =>
+        if (i < 8) Console.printLine(s"Monitor OK from ${id}")
+        else ZIO.fail(new RuntimeException(s"Monitor ${id} failed!"))
       },
       Schedule.fixed(2.seconds).jittered
     )
 
   val doProcessing =
-    ZStream.repeatEffectWith(
-      random.nextDoubleBetween(0.1, 0.5).map(f => s"Sample: ${f}"),
+    ZStream.repeatZIOWithSchedule(
+      Random.nextDoubleBetween(0.1, 0.5).map(f => s"Sample: ${f}"),
       Schedule.fixed(1.second).jittered
     )
 

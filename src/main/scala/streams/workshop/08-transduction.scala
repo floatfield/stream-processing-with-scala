@@ -1,8 +1,9 @@
 package streams.workshop
 
 import zio._
-import zio.duration._
+
 import zio.stream._
+import zio.Random
 
 object AccumulatingMaps {
   // 1. Compute a running sum of this infinite stream using mapAccum.
@@ -10,7 +11,7 @@ object AccumulatingMaps {
 
   // 2. Use mapAccum to pattern match on the stream and group consecutive
   // rising numbers.
-  val risingNumbers = ZStream.repeatEffect(random.nextIntBetween(0, 21)) ?
+  val risingNumbers = ZStream.repeatZIO(Random.nextIntBetween(0, 21)) ?
 
   // 3. Using mapAccumM, write a windowed aggregation function. Sum the
   // incoming elements into windows of N seconds.
@@ -18,8 +19,8 @@ object AccumulatingMaps {
   case class Windowed(windowStart: Long, windowEnd: Long, sum: Long)
 
   val records =
-    ZStream.repeatEffectWith(
-      random.nextLongBetween(0, 100).map(Record(_)),
+    ZStream.repeatZIOWithSchedule(
+      Random.nextLongBetween(0, 100).map(Record(_)),
       Schedule.fixed(5.seconds).jittered
     )
 
@@ -40,11 +41,11 @@ object Transduction {
   case class Record(key: String, data: Long)
   def recordStream[R](schedule: Schedule[R, Any, Any]) =
     ZStream
-      .repeatEffectWith(
-        random
+      .repeatZIOWithSchedule(
+        Random
           .shuffle(List("a", "b", "c", "d"))
           .map(_.head)
-          .zipWith(random.nextLongBetween(0, 15))(Record(_, _)),
+          .zipWith(Random.nextLongBetween(0, 15))(Record(_, _)),
         schedule
       )
 
@@ -55,7 +56,7 @@ object Transduction {
     def writeBatch(data: Map[String, Record]): RIO[clock.Clock, Unit]
   }
   object Database {
-    def make: Database = data => Task(println(s"Writing ${data}")).delay(1.second)
+    def make: Database = data => ZIO.attempt(println(s"Writing ${data}")).delay(1.second)
   }
 
   val records = recordStream(Schedule.forever) ?
@@ -71,11 +72,11 @@ object Transduction {
 
   // 4. Batch records in this stream into groups of up to 50 records for as long as
   // the database writing operator is busy.
-  val batchWhileBusy = recordStream(Schedule.fixed(500.millis).jittered(0.25, 1.5)).mapM(???) ?
+  val batchWhileBusy = recordStream(Schedule.fixed(500.millis).jittered(0.25, 1.5)).mapZIO(???) ?
 
   // 5. Perform adaptive batching in this stream: group the records in groups of
   // up to 50; as long as the resulting groups are under 40 records, the delay
   // between every batch emitted should increase by 50 millis.
-  val adaptiveBatching = recordStream(Schedule.fixed(500.millis).jittered(0.25, 1.5)).mapM(???) ?
+  val adaptiveBatching = recordStream(Schedule.fixed(500.millis).jittered(0.25, 1.5)).mapZIO(???) ?
 
 }

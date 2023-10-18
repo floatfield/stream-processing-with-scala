@@ -5,13 +5,15 @@ import zio.stream._
 import org.apache.kafka.common.serialization.StringSerializer
 import org.apache.kafka.clients.producer.KafkaProducer
 import org.apache.kafka.clients.producer.ProducerRecord
+import zio.Random
+import zio.managed._
 
 object Sinks {
   // 1. Extract the first element of this stream using runHead.
-  val head = ZStream.unwrap(random.nextInt.map(ZStream.range(0, _))) ?
+  val head = ZStream.unwrap(Random.nextInt.map(ZStream.range(0, _))) ?
 
   // 2. Extract the last element of this stream using runLast.
-  val last = ZStream.unwrap(random.nextInt.map(ZStream.range(0, _))) ?
+  val last = ZStream.unwrap(Random.nextInt.map(ZStream.range(0, _))) ?
 
   // 3. Parse the CSV file at the root of the repository into its header line
   // and a stream that represents the rest of the lines. Use `ZStream#peel`.
@@ -28,7 +30,7 @@ object Sinks {
   def producer: ZManaged[Any, Throwable, KafkaProducer[String, String]] = {
     val props = new java.util.Properties
     props.put("bootstrap.server", "localhost:9092")
-    ZManaged.makeEffect(new KafkaProducer(props, new StringSerializer, new StringSerializer))(_.close())
+    ZManaged.acquireReleaseAttemptWith(new KafkaProducer(props, new StringSerializer, new StringSerializer))(_.close())
   }
 
   def toProducerRecord(topic: String, value: String): ProducerRecord[String, String] =
@@ -42,7 +44,7 @@ object Sinks {
 
   // 7. Use ZSink.fold to sample 10 random elements from the stream, and then switch
   // to ZSink.collectAllToSet to gather the rest of the elements of the stream.
-  val sequencedSinks = ZStream.repeatEffect(random.shuffle(List("a", "b", "c", "d")).map(_.head))
+  val sequencedSinks = ZStream.repeatZIO(Random.shuffle(List("a", "b", "c", "d")).map(_.head))
 
   // 8. Use ZSink.fromOutputStream, GZIPOutputStream and ZStream.fromFile to compress a file.
   def compressFile(filename: String) = ???

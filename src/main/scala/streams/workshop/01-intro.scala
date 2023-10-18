@@ -1,19 +1,20 @@
 package streams.workshop
 
 import zio._
-import zio.console.{ getStrLn, putStrLn }
-import zio.duration._
+
 import java.nio.channels.AsynchronousFileChannel
 import java.nio.file.Paths
 import java.nio.ByteBuffer
 import java.nio.channels.CompletionHandler
 import java.nio.channels.FileChannel
 import java.nio.file.Path
-import zio.clock.Clock
-import zio.blocking.Blocking
-import zio.console.Console
+import zio.Clock
+
 import java.io.IOException
 import scala.io.Source
+import zio.{ Console, ZIO }
+import zio.Console.{ printLine, readLine }
+import zio.managed._
 
 object Types {
   // In ZIO, the `ZIO[R, E, A]` data type represents a program that
@@ -42,7 +43,7 @@ object Types {
 
   // 6. A program that requires access to blocking IO and the console,
   // could fail with a list of throwables or a number, and never terminates.
-  type Last = ZIO[Blocking with Console, Either[List[Throwable], Int], Nothing]
+  type Last = ZIO[Console, Either[List[Throwable], Int], Nothing]
 }
 
 object Values {
@@ -63,14 +64,14 @@ object Values {
       ZIO.succeed(x / y)
 
   // 4. A program that prints out the requested line.
-  def printIt(line: String): ZIO[Console, IOException, Unit] = putStrLn(line)
+  def printIt(line: String): ZIO[Console, IOException, Unit] = printLine(line)
 
   // 5. A program that reads a line from the console.
-  val readLine: ZIO[Console, IOException, String] = getStrLn
+  val readLine: ZIO[Console, IOException, String] = readLine
 
   // 6. A program that reads a file using blocking IO.
-  def readFile(name: String): ZIO[Has[Blocking.Service], Throwable, String] =
-    blocking.effectBlocking {
+  def readFile(name: String): ZIO[Any, Throwable, String] =
+    ZIO.attemptBlocking {
       val file     = Source.fromFile(name)
       val contents = file.getLines()
       file.close()
@@ -95,7 +96,7 @@ object Values {
   }
 
   def readFileZIO(name: String): IO[Throwable, Chunk[Byte]] =
-    ZIO.effectAsync(cb => readFileAsync(name, either => cb(ZIO.fromEither(either))))
+    ZIO.async(cb => readFileAsync(name, either => cb(ZIO.fromEither(either))))
 
 }
 
@@ -139,12 +140,12 @@ object Sequencing {
 object ErrorHandling {
   // 1. Recover from the error in the following program by
   // printing it and returning a default value:
-  val recover: ??? = IO.fail("Boom") ?
+  val recover: ??? = ZIO.fail("Boom") ?
 
   // 2. Using foldM, recover from the error by printing it and
   // returning a default, or print the value before returning it.
   def divide(i: Int, j: Int): Int = i / j
-  val folded: ???                 = Task(divide(5, 0)) ?
+  val folded: ???                 = ZIO.attempt(divide(5, 0)) ?
 
   sealed abstract class ProgramError(msg: String) extends Throwable(msg)
   case class Fatal(msg: String)                   extends ProgramError(msg)
@@ -163,12 +164,12 @@ object ErrorHandling {
   val either: ??? = mightFail ?
 
   // 6. Fallback to the secondary database if the primary fails:
-  def queryFrom(database: String): Task[String] = Task(s"result from $database")
+  def queryFrom(database: String): Task[String] = ZIO.attempt(s"result from $database")
 
   val program3: ??? = queryFrom("primary") ?
 
   // 7. Recover from the defect in the following code which is imported as infallible:
-  val lies: UIO[Int] = UIO(throw new RuntimeException)
+  val lies: UIO[Int] = ZIO.succeed(throw new RuntimeException)
   val noDefects: ??? = lies ?
 }
 
@@ -187,58 +188,60 @@ object ManagedResources {
     }
   }
 
-  def readFileBytesZIO(path: String): ZIO[Blocking, Throwable, Chunk[Byte]] =
-    ZIO.bracket(
-      ZIO.effect(FileChannel.open(Paths.get(path))),
-      (channel: FileChannel) => ZIO.effect(if (channel ne null) channel.close()).orDie,
+  def readFileBytesZIO(path: String): ZIO[Any, Throwable, Chunk[Byte]] =
+    ZIO.acquireReleaseWith(
+      ZIO.attempt(FileChannel.open(Paths.get(path))),
+      (channel: FileChannel) => ZIO.attempt(if (channel ne null) channel.close()).orDie,
       (channel: FileChannel) =>
-        blocking.effectBlocking {
+        ZIO.attemptBlocking {
           val buf = ByteBuffer.allocate(8192)
           channel.read(buf)
           Chunk.fromByteBuffer(buf)
         }
     )
 
-  def writeFilesBytes(path: String, chunk: Chunk[Byte]): RIO[Blocking, Unit] =
-    ZIO.bracket(
-      ZIO.effect(FileChannel.open(Paths.get(path))),
-      (channel: FileChannel) => ZIO.effect(if (channel ne null) channel.close()).orDie,
+  def writeFilesBytes(path: String, chunk: Chunk[Byte]): RIO[Any, Unit] =
+    ZIO.acquireReleaseWith(
+      ZIO.attempt(FileChannel.open(Paths.get(path))),
+      (channel: FileChannel) => ZIO.attempt(if (channel ne null) channel.close()).orDie,
       (channel: FileChannel) =>
-        blocking.effectBlocking {
+        ZIO.attemptBlocking {
           val _ = channel.write(ByteBuffer.wrap(chunk.toArray))
         }
     )
 
   // 2. Acquire channels to two files in a bracket and transfer a chunk of bytes between them:
-  val transfer: RIO[Blocking, Unit] = readFileBytesZIO("./file").flatMap(writeFilesBytes("./file2", _))
+  val transfer: RIO[Any, Unit] = readFileBytesZIO("./file").flatMap(writeFilesBytes("./file2", _))
 
   // 3. Acquire channels to *three* files in a bracket and transfer a chunk
   // of bytes from the first to the second and third:
-  val transfer2: RIO[Blocking, Unit] = readFileBytesZIO("./file").flatMap(channel =>
+  val transfer2: RIO[Any, Unit] = readFileBytesZIO("./file").flatMap(channel =>
     writeFilesBytes("./file2", channel) *> writeFilesBytes("./file3", channel)
   )
 
   // 4. Create a ZManaged value that allocates a file channel.
-  def fileChannel(path: Path): ZManaged[Any, Throwable, FileChannel] =
-    ZManaged.makeEffect(FileChannel.open(path))(_.close())
+  def fileChannel(path: Path): ZIO[Any, Throwable, FileChannel] =
+    ZIO.acquireReleaseWith(
+      ZIO.attempt(FileChannel.open(path))
+    )(file => ZIO.attempt(file.close()))
 
   // 5. Using `fileChannel`, acquire channels to all the requested paths:
-  def channels(paths: Path*): ZManaged[Any, Throwable, List[FileChannel]] =
-    ZManaged.foreach(paths)(fileChannel)
+  def channels(paths: Path*): ZIO[Any, Throwable, List[FileChannel]] =
+    ZIO.foreach(paths)(fileChannel)
 
   // 6. Compose two managed file channels in a for-comprehension, and print
   // out a message after the second one is closed:
-  val channels2: ZManaged[Console, Throwable, (FileChannel, FileChannel)] = {
+  val channels2: ZIO[Console with Scope, Throwable, (FileChannel, FileChannel)] = {
 // fileChannel()
     for {
       channel1 <- fileChannel(Paths.get("./some1"))
-      channel2 <- fileChannel(Paths.get("./some2")).ensuring(putStrLn("get it"))
+      channel2 <- fileChannel(Paths.get("./some2")).ensuring(printLine("get it").orDie)
     } yield (channel1, channel2)
   }
   // 7. Wrap this ZIO program with a fiber that prints out a message
   // every 5 seconds and is interrupted when the block ends:
   def monitor(program: Task[Unit]): ZIO[Clock with Console, Throwable, Unit] =
-    (ZIO.sleep(5.seconds) *> putStrLn("sss")).forever.race(program)
+    (ZIO.sleep(5.seconds) *> printLine("sss")).forever.race(program)
 
   // 8. Create a scope in which files can be safely opened and closed,
   // and write some data to 3 files in it:
@@ -248,9 +251,11 @@ object ManagedResources {
   // the order of prints in this snippet, without running it:
   val ordering = // foo bar a b c c bin b bin a bin bar fin baz foo bin
     for {
-      _ <- ZManaged.make(putStrLn("foo"))(_ => putStrLn("foo fin"))
-      _ <- ZManaged.finalizer(putStrLn("baz"))
-      _ <- ZManaged.make(putStrLn("bar"))(_ => putStrLn("bar fin"))
-      _ <- ZManaged.foreach(List("a", "b", "c"))(n => ZManaged.make(putStrLn(n))(_ => putStrLn(s"$n fin")))
+      _ <- ZIO.acquireRelease(printLine("foo"))(_ => printLine("foo fin"))
+      _ <- ZIO.withFinalizer(_ => printLine("baz"))
+      _ <- ZIO.acquireRelease(printLine("bar"))(_ => printLine("bar fin"))
+      _ <- ZIO.foreach(List("a", "b", "c"))(n =>
+            ZIO.acquireReleaseWith(printLine(n))(_ => ZIO.unit)(_ => printLine(s"$n fin"))
+          )
     } yield ()
 }

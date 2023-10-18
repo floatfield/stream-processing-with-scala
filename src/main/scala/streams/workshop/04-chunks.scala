@@ -12,8 +12,8 @@ object Chunks {
 
   // 3. Fold a chunk of integers into its sum and print the
   // partial sums as it is folded.
-  val sum2: URIO[console.Console, Int] =
-    Chunk(1, 2, 3).foldM(0)((cumSum, next) => console.putStrLn(cumSum.toString).as(cumSum + next))
+  val sum2: URIO[Console, Int] =
+    Chunk(1, 2, 3).foldZIO(0)((cumSum, next) => Console.printLine(cumSum.toString).as(cumSum + next).orDie)
 
   // 4. Copy the contents of a chunk to an array.
   val arr: Array[Int] = Chunk(1, 2, 3).toArray
@@ -57,48 +57,48 @@ object ChunkedStreams {
   val intStream2: Stream[Nothing, Int] = ZStream.fromChunks(Chunk(1), Chunk(2, 3))
 
   // 3. Consume the chunks of a multiple chunk stream and print them out.
-  val printChunks: URIO[console.Console, Unit] = intStream2.foreachChunk(chunk => console.putStrLn(chunk.toString()))
+  val printChunks: URIO[Console, Unit] = intStream2.runForeachChunk(chunk => Console.printLine(chunk.toString()).orDie)
 
   // 4. Transform each chunk of integers to its sum and print it.
-  val summedChunks: ZStream[console.Console, Nothing, Int] =
+  val summedChunks: ZStream[Console, Nothing, Int] =
     ZStream
       .fromChunks(Chunk(1, 2), Chunk(3, 4), Chunk(5, 6))
       .mapChunks(chunk => Chunk(chunk.sum))
-      .tap(chunk => console.putStrLn(chunk.toString()))
+      .tap(chunk => Console.printLine(chunk.toString()).orDie)
 
   // 5. Compare the chunking behavior of mapChunksM and mapM.
-  val printedNumbers: ZStream[console.Console, Nothing, Int] =
-    ZStream.fromChunks(Chunk(1, 2), Chunk(3, 4)).mapM(i => console.putStrLn(i.toString).as(i))
+  val printedNumbers: ZStream[Console, Nothing, Int] =
+    ZStream.fromChunks(Chunk(1, 2), Chunk(3, 4)).mapZIO(i => Console.printLine(i.toString).as(i).orDie)
 
-  val printedNumbersChunk: ZStream[console.Console, Nothing, Int] =
-    ZStream.fromChunks(Chunk(1, 2), Chunk(3, 4)).mapChunksM(_.mapM(i => console.putStrLn(i.toString).as(i)))
+  val printedNumbersChunk: ZStream[Console, Nothing, Int] =
+    ZStream.fromChunks(Chunk(1, 2), Chunk(3, 4)).mapChunksZIO(_.mapZIO(i => Console.printLine(i.toString).as(i)).orDie)
 
   // 6. Compare the behavior of the following streams under errors.
   def faultyPredicate(i: Int): Task[Boolean] =
-    if (i < 10) Task.succeed(i % 2 == 0)
-    else Task.fail(new RuntimeException("Boom"))
+    if (i < 10) ZIO.succeed(i % 2 == 0)
+    else ZIO.fail(new RuntimeException("Boom"))
 
   val filteredStream =
     ZStream
       .fromChunks(Chunk(1, 2, 3), Chunk(8, 9, 10, 11))
-      .filterM(faultyPredicate)
-      .tap(i => console.putStrLn(i.toString))
+      .filterZIO(faultyPredicate)
+      .tap(i => Console.printLine(i.toString))
 
   val filteredChunkStream =
     ZStream
       .fromChunks(Chunk(1, 2, 3), Chunk(8, 9, 10, 11))
-      .mapChunksM(_.filterM(faultyPredicate))
-      .tap(i => console.putStrLn(i.toString))
+      .mapChunksZIO(_.filterZIO(faultyPredicate))
+      .tap(i => Console.printLine(i.toString))
 
   // 7. Re-chunk a singleton chunk stream into chunks of 4 elements.
   val rechunked: Stream[Nothing, Int] =
-    ZStream.fromChunks(List.fill(8)(Chunk(1)): _*).chunkN(4)
+    ZStream.fromChunks(List.fill(8)(Chunk(1)): _*).rechunk(4)
 
   // 8. Build a stream of longs from 0 to Int.MaxValue + 3.
-  val longs: ZStream[console.Console, Nothing, Long] =
-    Stream
+  val longs: ZStream[Console, Throwable, Long] =
+    ZStream
       .iterate(0L)(_ + 1L)
-      .mapChunksM(ch => console.putStrLn(ch.length.toString).as(ch))
+      .mapChunksZIO(ch => Console.printLine(ch.length.toString).as(ch))
       .take(Int.MaxValue.toLong + 3L)
 
   // 9. Flatten this stream of chunks:

@@ -5,7 +5,7 @@ import java.sql.{ Connection, DriverManager, ResultSet }
 import java.{ util => ju }
 
 import zio._
-import zio.duration._
+
 import zio.stream._
 import scala.collection.mutable
 import scala.jdk.CollectionConverters._
@@ -118,7 +118,7 @@ object ExternalSources {
         override def run(): Unit = {
           while (!shouldStop.get()) {
             if (scala.util.Random.nextInt(11) < 7)
-              subs.get().foreach(_.onMessage(Message(s"Hello ${System.currentTimeMillis}")))
+              subs.get().foreach(_.onMessage(Message(s"Hello ${java.lang.System.currentTimeMillis}")))
             else
               subs.get().foreach(_.onError(new RuntimeException("Boom!")))
 

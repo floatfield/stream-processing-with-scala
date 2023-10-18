@@ -7,6 +7,7 @@ import java.nio.file.FileSystems
 import java.nio.file.StandardWatchEventKinds
 import scala.jdk.CollectionConverters._
 import java.nio.file.WatchEvent
+import zio.{ Random, Random }
 
 object Resources {
   // Resource management is an important part of stream processing. Resources can be
@@ -15,37 +16,37 @@ object Resources {
   // the stream's data.
 
   class DatabaseClient(clientId: String) {
-    def readRow: URIO[random.Random, String] = random.nextString(5).map(str => s"${clientId}-${str}")
-    def writeRow(str: String): UIO[Unit]     = UIO(println(s"Writing ${str}"))
-    def close: UIO[Unit]                     = UIO(println(s"Closing $clientId"))
+    def readRow: URIO[Random, String]    = Random.nextString(5).map(str => s"${clientId}-${str}")
+    def writeRow(str: String): UIO[Unit] = ZIO.succeed(println(s"Writing ${str}"))
+    def close: UIO[Unit]                 = ZIO.succeed(println(s"Closing $clientId"))
   }
   object DatabaseClient {
     def make(clientId: String): Task[DatabaseClient] =
-      UIO(println(s"Opening $clientId")).as(new DatabaseClient(clientId))
+      ZIO.succeed(println(s"Opening $clientId")).as(new DatabaseClient(clientId))
   }
 
   // это самоделка
   private def clientDb(clientName: String): ZStream[Any, Throwable, DatabaseClient] =
-    ZStream.managed(Managed.make(DatabaseClient.make(clientName))(dbClient => dbClient.close))
+    ZStream.managed(Managed.acquireReleaseWith(DatabaseClient.make(clientName))(dbClient => dbClient.close))
 
   // 1. Create a stream that allocates the database client, reads 5 rows, writes
   // them back to the client and ends.
-  val fiveRows: ZStream[random.Random, Throwable, String] = clientDb("client")
-    .flatMap(db => ZStream.repeatEffect(db.readRow).take(5).tap(db.writeRow))
+  val fiveRows: ZStream[Random, Throwable, String] = clientDb("client")
+    .flatMap(db => ZStream.repeatZIO(db.readRow).take(5).tap(db.writeRow))
 
   // 2. Create a stream that reads 5 rows from 3 different database clients, and writes
   // them to a fourth (separate!) client, closing each reading client after finishing reading.
-  val fifteenRows: ZStream[random.Random, Throwable, Unit] = {
+  val fifteenRows: ZStream[Random, Throwable, Unit] = {
     val readingClients = ZStream.fromIterable(Range(1, 4)).flatMap(id => clientDb(s"reading client $id"))
     val writingClient  = clientDb("IBM-6000")
     for {
       write <- writingClient
-      sol   <- readingClients.mapMPar(3)(read => read.readRow.flatMap(write.writeRow))
+      sol   <- readingClients.mapZIOPar(3)(read => read.readRow.flatMap(write.writeRow))
     } yield sol
   }
   // 3. Read 25 rows from 3 different database clients, and write the rows to 5 additional
   // database clients - 5 rows each. Hint: use ZManaged.scope.
-  val scopes: ZStream[random.Random, Throwable, String] = ???
+  val scopes: ZStream[Random, Throwable, String] = ???
 }
 
 object FileIO {
