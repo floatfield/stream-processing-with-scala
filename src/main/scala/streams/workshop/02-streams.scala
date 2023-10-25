@@ -1,11 +1,9 @@
 package streams.workshop
 
 import zio._
-import zio.Clock
 import zio.stream._
 import java.nio.file.Path
 import java.io.IOException
-import zio.{ Console, Console, Random, Random }
 
 object StreamTypes {
   // 1. A stream that emits integers and cannot fail.
@@ -19,7 +17,7 @@ object StreamTypes {
 
   // 4. A stream that requires access to the console, can fail with
   // string errors and emits integers.
-  type ConsoleIntStream = ZStream[Console, IOException, Int]
+  type ConsoleIntStream = ZStream[Any, IOException, Int]
 }
 
 object ConstructingStreams {
@@ -35,13 +33,13 @@ object ConstructingStreams {
   val chars: ZStream[Any, Nothing, Char] = ZStream('a', 'b', 'c')
 
   // 3. Construct a stream from an effect that reads a line from the user.
-  val readLine: ZStream[Console, IOException, String] = ZStream.fromZIO(Console.readLine)
+  val readLine: ZStream[Any, IOException, String] = ZStream.fromZIO(Console.readLine)
 
   // 4. Construct a stream that fails with the string "boom".
   val failed: ZStream[Any, String, Unit] = ZStream.fail("boom")
 
   // 5. Create a stream that extracts the Clock from the environment.
-  val clockStream: ZStream[Clock, Nothing, Clock] = ZStream.environment[Clock]
+  // val clockStream: ZStream[Clock, Nothing, Clock] = ZStream.environment[Clock]
 
   // 6. Construct a stream from an existing list of numbers:
   val ns: List[Int]                       = List.fill(100)(1)
@@ -58,13 +56,18 @@ object ConstructingStreams {
   // 8. Drain an iterator using `repeatEffectOption`.
   def drainIterator[A](iterator: Iterator[A]): ZStream[Any, Throwable, A] =
     ZStream.repeatZIOOption(
-      ZIO(iterator.hasNext).mapError(Option(_)).flatMap { hasData =>
-        if (hasData) ZIO(iterator.next()).mapError(Option(_))
-        else ZIO.fail[Option[Throwable]](None)
+      if (iterator.hasNext) {
+        ZIO.attempt(iterator.next()).mapError(Option(_))
+      } else {
+        ZIO.fail(None)
       }
+      // ZIO.attempt(iterator.hasNext).mapError(Option(_)).flatMap { hasData =>
+      //   if (hasData) ZIO.attempt(iterator.next()).mapError(Option(_))
+      //   else ZIO.fail[Option[Throwable]](None)
+      // }
     )
   // 9. Using ZStream.unwrap, unwrap the stream embedded in this effect.
-  val wrapped                                 = ZIO(ZStream(1, 2, 3))
+  val wrapped                                 = ZIO.succeed(ZStream(1, 2, 3))
   val unwrapped: ZStream[Any, Throwable, Int] = ZStream.unwrap(wrapped)
   // 10. Using ZStream.unfold, create a stream that emits the numbers 1 to 10.
   val oneTo10: ZStream[Any, Nothing, Int] = ZStream.unfold(1)(next =>
@@ -77,7 +80,7 @@ object ConstructingStreams {
 
   val oneTo10WithSleeps: ZStream[Clock, Throwable, Int] = ZStream.unfoldZIO(1)(next =>
     if (next > 10) ZIO.succeed(None)
-    else ZIO(Some((next, next + 1))) <* ZIO.sleep(next.millis)
+    else ZIO.succeed(Some((next, next + 1))) <* ZIO.sleep(next.millis)
   )
 
   // 12. Read an array in chunks using unfoldChunkM.
@@ -121,9 +124,9 @@ object TransformingStreams {
 
   // 2. Multiply every integer of the stream using a coefficient
   // retrieved effectfully.
-  val currentCoefficient: ZIO[Random, Nothing, Double] =
+  val currentCoefficient: ZIO[Any, Nothing, Double] =
     Random.nextDoubleBetween(0.5, 0.85)
-  val multiplied: ZStream[Random, Nothing, Double] =
+  val multiplied: ZStream[Any, Nothing, Double] =
     ZStream.range(1, 10).mapZIO(i => currentCoefficient.map(_ * i))
 
   // 3. Split every string to separate lines in this stream.
@@ -156,13 +159,13 @@ object TransformingStreams {
 
   // 8. Split the following stream of CSV data to individual tokens
   // that are emitted on a 2-second schedule
-  val scheduled: ZStream[clock.Clock, Nothing, String] =
+  val scheduled: ZStream[Any, Nothing, String] =
     ZStream("DDOG,12.7,12.8", "NET,10.1,10.2").flatMap { rawInput =>
       val split = rawInput.split(",")
 
       ZStream
         .fromIterable(split.tail.map(d => s"$split.head:$d"))
-        .schedule(Schedule.fixed(zio.duration.durationInt(2).seconds))
+        .schedule(Schedule.fixed(Duration.fromSeconds(2)))
     }
 
   // 9. Terminate this infinite stream as soon as a `Left` is emitted.
