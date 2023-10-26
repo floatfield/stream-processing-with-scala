@@ -7,7 +7,9 @@ import java.nio.file.FileSystems
 import java.nio.file.StandardWatchEventKinds
 import scala.jdk.CollectionConverters._
 import java.nio.file.WatchEvent
-import org.postgresql.jdbc.PgDatabaseMetaData
+import java.io.FileInputStream
+import java.io.IOException
+import java.io.FileReader
 
 object Resources {
   // Resource management is an important part of stream processing. Resources can be
@@ -31,8 +33,9 @@ object Resources {
 
   // 1. Create a stream that allocates the database client, reads 5 rows, writes
   // them back to the client and ends.
-  val fiveRows(client: ZStream[Any, Throwable, DatabaseClient]): ZStream[Any, Throwable, String] = client
-    .flatMap(db => ZStream.repeatZIO(db.readRow).take(5).tap(db.writeRow))
+  def fiveRows(client: ZStream[Any, Throwable, DatabaseClient]): ZStream[Any, Throwable, String] =
+    client
+      .flatMap(db => ZStream.repeatZIO(db.readRow).take(5).tap(db.writeRow))
 
   // 2. Create a stream that reads 5 rows from 3 different database clients, and writes
   // them to a fourth (separate!) client, closing each reading client after finishing reading.
@@ -41,7 +44,7 @@ object Resources {
     val writingClient  = clientDb("IBM-6000")
     for {
       write <- writingClient
-      sol   <- readingClients.mapZIOPar(3)(read => ZStream.repeatZIO(read.readRow).take(5).map(write.writeRow))
+      sol   <- readingClients.mapZIOPar(3)(read => ZStream.repeatZIO(read.readRow).take(5).foreach(write.writeRow))
     } yield sol
   }
 
@@ -53,41 +56,66 @@ object Resources {
 
   def writeToClients(
     readClient: DatabaseClient,
-    writeClients: List[DatabaseClient],
-    rowsToRead: Int,
+    writeClients: ZStream[Any, Throwable, DatabaseClient],
+    rowsToRead: Long,
     rowsToWriteToClient: Int
-  ): Task[Unit] =
-    readClient.readRow.map(
-      data => ZIO.(
-        
-      )
-    )
+  ): Task[Unit] = {
+    val readChunks = ZStream
+      .repeatZIO(readClient.readRow)
+      .take(rowsToRead)
+      .rechunk(rowsToWriteToClient)
+      .chunks
+    (readChunks <*> writeClients).foreach {
+      case (chunk, client) => ZIO.foreach(chunk)(row => client.writeRow(row))
+    }
+  }
 
   def mkStream(
     readClientIds: List[String],
     writeClientIds: List[String],
-    rowsToRead: Int,
+    rowsToRead: Long,
     rowsToWriteToClient: Int
-  ): ZStream[Scope, Throwable, Unit] = {}
+  ): ZIO[Any, Throwable, Unit] = {
+    val writeClients = ZStream
+      .fromIterable(writeClientIds)
+      .flatMap(id => clientDb(s"write client $id"))
+    ZStream
+      .fromIterable(readClientIds)
+      .flatMap(id => clientDb(s"read client $id"))
+      .foreach(readClient => writeToClients(readClient, writeClients, rowsToRead, rowsToWriteToClient))
+  }
+
   // 3. Read 25 rows from 3 different database clients, and write the rows to 5 additional
   // database clients - 5 rows each. Hint: use ZManaged.scope.
-  val scopes: ZStream[Random, Throwable, String] = ZStream.scoped{}
+  val scopes: Task[Unit] = mkStream(
+    (0 to 3).map(_.toString).toList,
+    (0 to 5).map(_.toString).toList,
+    25L,
+    5
+  )
 }
 
 object FileIO {
+  import java.nio.file.{ Files, Path }
   // 1. Implement the following combinator for reading bytes from a file using
   // java.io.FileInputStream.
-  def readFileBytes(path: String): ZStream[???, ???, Byte] = ???
+  def readFileBytes(path: String): ZStream[Any, IOException, Byte] =
+    ZStream.fromInputStream(new FileInputStream(path))
 
   // 2. Implement the following combinator for reading characters from a file using
   // java.io.FileReader.
-  def readFileChars(path: String): ZStream[???, ???, Char] = ???
+  def readFileChars(path: String): ZStream[Any, IOException, Char] =
+    ZStream.fromReader(new FileReader(path))
 
   // 3. Recursively enumerate all files in a directory.
-  def listFilesRecursive(path: String): ZStream[???, ???, Path] = ???
+  def listFilesRecursive(path: String): ZStream[Any, Throwable, Path] =
+    ZStream
+      .fromJavaStream(Files.list(Path.of(path)))
+      .filterZIO(path => ZIO.attempt(Files.isDirectory(path)))
 
   // 4. Read data from all files in a directory tree.
-  def readAllFiles(path: String): ZStream[???, ???, Char] = ???
+  def readAllFiles(path: String): ZStream[Any, Throwable, Char] =
+    listFilesRecursive(path).flatMap(path => readFileChars(path.toString))
 
   // 5. Monitor a directory for new files using Java's WatchService.
   // Imperative example:
@@ -113,7 +141,30 @@ object FileIO {
     }
   }
 
-  def monitorFileCreation(path: String): ZStream[???, ???, Path] = ???
+  def monitorFileCreation(path: String): ZStream[Any, Throwable, Path] =
+    ZStream
+      .acquireReleaseWith(
+        ZIO.attempt(FileSystems.getDefault().newWatchService())
+      )(watcher => ZIO.attempt(watcher.close()).orDie)
+      .tap(watcher => ZIO.attempt(Path.of(path).register(watcher, StandardWatchEventKinds.ENTRY_CREATE)))
+      .flatMap(watcher =>
+        ZStream.unfoldChunkZIO(true: Boolean) { cont =>
+          for {
+            key <- ZIO.attemptBlocking(watcher.take())
+            paths <- ZIO.attempt(key.pollEvents).map { events =>
+                      events.asScala.flatMap(watchEvent =>
+                        watchEvent.kind match {
+                          case StandardWatchEventKinds.ENTRY_CREATE =>
+                            val pathEv = watchEvent.asInstanceOf[WatchEvent[Path]]
+                            List(pathEv.context())
+                          case _ => Nil
+                        }
+                      )
+                    }
+            c <- ZIO.attempt(key.reset())
+          } yield Some((Chunk.fromIterable(paths), c)).filter(_ => cont)
+        }
+      )
 
   // 6. Write a stream that synchronizes directories.
   def synchronize(source: String, dest: String): ??? = ???
