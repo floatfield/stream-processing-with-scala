@@ -2,7 +2,6 @@ package streams.workshop
 
 import zio._
 import zio.stream._
-import java.nio.file.Path
 import java.nio.file.FileSystems
 import java.nio.file.StandardWatchEventKinds
 import scala.jdk.CollectionConverters._
@@ -167,19 +166,31 @@ object FileIO {
       )
 
   // 6. Write a stream that synchronizes directories.
-  def synchronize(source: String, dest: String): ??? = ???
+  def synchronize(source: String, dest: String): ZStream[Any, Throwable, Path] =
+    monitorFileCreation(source)
+      .mapZIO(sourceFile =>
+        ZIO.attemptBlocking(
+          Files.copy(Path.of(source, sourceFile.toString), Path.of(dest, sourceFile.toString))
+        )
+      )
+
 }
 
 object SocketIO {
   // 1. Print the first 2048 characters of the URL.
-  def readUrl(url: String): ZStream[???, ???, Char] = ???
+  import java.net.URI
+  def readUrl(url: String): ZStream[Any, Nothing, Char] =
+    ZStream
+      .from(new URI(url))
+      .take(2048)
+      .tap(c => console.putStr(c))
 
   // 2. Create an echo server with ZStream.fromSocketServer.
-  val server = ZStream.fromSocketServer(???, ???)
+  val server = ZStream.fromSocketServer(9000, Option("0.0.0.0")).map(connection => connection.read.map(print))
 
   // 3. Use `ZStream#toInputStream` and `java.io.InputStreamReader` to decode a
   // stream of bytes from a file to a string.
-  val data = ZStream.fromFile(???) ?
+  val data = ZStream.fromFile(new InputStreamReader()) ?
 
   // 4. Integrate GZIP decoding using GZIPInputStream, ZStream#toInputStream
   // and ZStream.fromInputStream.
