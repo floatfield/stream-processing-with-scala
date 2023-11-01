@@ -50,6 +50,30 @@ object ExternalSources {
     }
   }
 
+  def readRowsZIO(
+    url: String,
+    connProps: ju.Properties,
+    sql: String
+  ): ZStream[Any, Throwable, String] =
+    for {
+      connection <- ZStream
+                     .acquireReleaseWith(
+                       ZIO.attempt(DriverManager.getConnection(url, connProps))
+                     )(conn => ZIO.attempt(conn.close()).orDie)
+      statement <- ZStream.fromZIO(ZIO.attempt(connection.createStatement()))
+      _         <- ZStream.fromZIO(ZIO.attempt(statement.setFetchSize(5)))
+      resultSet <- ZStream.acquireReleaseWith(ZIO.attempt(statement.executeQuery(sql)))(resultSet =>
+                    ZIO.attempt(resultSet.close()).orDie
+                  )
+      result <- ZStream.repeatZIOOption {
+                 val a = ZIO.fail(None).whenZIO(ZIO.attempt(resultSet.next()).mapError(Option(_)))
+                 val b = ZIO
+                   .attempt(resultSet.getString(0))
+                   .mapError(Option(_))
+                 a *> b
+               }
+    } yield result
+
   // 2. Convert this function, which polls a Kafka consumer, to use ZStream and
   // ZManaged.
   // Type: Unbounded, stateless iteration

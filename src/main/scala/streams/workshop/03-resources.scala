@@ -178,21 +178,37 @@ object FileIO {
 
 object SocketIO {
   // 1. Print the first 2048 characters of the URL.
-  import java.net.URI
-  def readUrl(url: String): ZStream[Any, Nothing, Char] =
+  import java.net.URL
+  import java.io.InputStreamReader
+  import java.io.File
+  import java.util.zip.GZIPInputStream
+  def readUrl(url: String): ZStream[Any, IOException, Char] =
     ZStream
-      .from(new URI(url))
+      .fromReader(new InputStreamReader((new URL(url)).openStream()))
       .take(2048)
-      .tap(c => console.putStr(c))
+  // .tap(c => printLine(c))
 
   // 2. Create an echo server with ZStream.fromSocketServer.
-  val server = ZStream.fromSocketServer(9000, Option("0.0.0.0")).map(connection => connection.read.map(print))
+  val server = ZStream
+    .fromSocketServer(9000, Option("0.0.0.0"))
+    .map(connection => connection.read >>> connection.write)
 
   // 3. Use `ZStream#toInputStream` and `java.io.InputStreamReader` to decode a
   // stream of bytes from a file to a string.
-  val data = ZStream.fromFile(new InputStreamReader()) ?
-
+  val data = ZStream
+    .fromFile(new File("path.txt"), 2048)
+    .toInputStream
+    .map(input => new InputStreamReader(input))
+    .flatMap(reader => ZStream.fromReader(reader).runCollect.map(_.mkString))
   // 4. Integrate GZIP decoding using GZIPInputStream, ZStream#toInputStream
   // and ZStream.fromInputStream.
-  val gzipDecodingServer = ZStream.fromSocketServer(???, ???)
+  val gzipDecodingServer: ZStream[Scope, Throwable, String] = ZStream
+    .fromSocketServer(9000, Option("0.0.0.0"))
+    .flatMap(connection =>
+      ZStream.fromZIO(
+        connection.read.toInputStream
+          .map(input => new InputStreamReader(new GZIPInputStream(input)))
+          .flatMap(reader => ZStream.fromReader(reader).runCollect.map(_.mkString))
+      )
+    )
 }
