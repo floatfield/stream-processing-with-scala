@@ -226,7 +226,7 @@ object ManagedResources {
     )(file => ZIO.attempt(file.close()))
 
   // 5. Using `fileChannel`, acquire channels to all the requested paths:
-  def channels(paths: Path*): ZIO[Any, Throwable, List[FileChannel]] =
+  def channels(paths: Path*): ZIO[Any, Throwable, Seq[FileChannel]] =
     ZIO.foreach(paths)(fileChannel)
 
   // 6. Compose two managed file channels in a for-comprehension, and print
