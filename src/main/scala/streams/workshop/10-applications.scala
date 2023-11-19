@@ -1,9 +1,7 @@
 package streams.workshop
 
 import zio._
-
 import zio.stream._
-import zio.{ Console, Random }
 
 object Applications {
   // 1. Write a layer that represents a database client that supports
@@ -49,7 +47,7 @@ object Applications {
     .acquireReleaseWith(Console.printLine("Listening on port 8080"))(_ => Console.printLine("Unbinding HTTP server"))
     .mapZIO(_ => ZIO.never)
 
-  val app: ZIO[ZEnv, Nothing, ExitCode] = ???
+  val app: ZIO[Any, Nothing, ExitCode] = ???
 
   // 3. Create a layer that sets up a background cache invalidation fiber.
   // Pattern: streams as background processes

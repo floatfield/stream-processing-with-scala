@@ -156,6 +156,9 @@ object FileIO {
                           case StandardWatchEventKinds.ENTRY_CREATE =>
                             val pathEv = watchEvent.asInstanceOf[WatchEvent[Path]]
                             List(pathEv.context())
+                          case StandardWatchEventKinds.ENTRY_MODIFY =>
+                            val pathEv = watchEvent.asInstanceOf[WatchEvent[Path]]
+                            List(pathEv.context())
                           case _ => Nil
                         }
                       )
@@ -183,7 +186,7 @@ object SocketIO {
     ZStream
       .from(new URI(url))
       .take(2048)
-      .tap(c => console.putStr(c))
+      .tap(c => println(c))
 
   // 2. Create an echo server with ZStream.fromSocketServer.
   val server = ZStream.fromSocketServer(9000, Option("0.0.0.0")).map(connection => connection.read.map(print))

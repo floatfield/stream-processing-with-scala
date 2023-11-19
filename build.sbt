@@ -4,7 +4,7 @@ lazy val root = (project in file("."))
   .settings(
     name := "stream-processing",
     organization := "com.iravid",
-    scalaVersion := "2.13.2",
+    scalaVersion := "2.13.12",
     scalacOptions := Seq(
       "-deprecation",
       "-encoding",

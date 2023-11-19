@@ -5,8 +5,6 @@ import zio.stream._
 import org.apache.kafka.common.serialization.StringSerializer
 import org.apache.kafka.clients.producer.KafkaProducer
 import org.apache.kafka.clients.producer.ProducerRecord
-import zio.Random
-import zio.managed._
 
 object Sinks {
   // 1. Extract the first element of this stream using runHead.

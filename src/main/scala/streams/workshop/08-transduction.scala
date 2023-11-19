@@ -53,7 +53,7 @@ object Transduction {
   // records' primary key. Keep the last record for every key. Use ZTransducer.collectAllToMapN.
 
   trait Database {
-    def writeBatch(data: Map[String, Record]): RIO[clock.Clock, Unit]
+    def writeBatch(data: Map[String, Record]): RIO[Clock, Unit]
   }
   object Database {
     def make: Database = data => ZIO.attempt(println(s"Writing ${data}")).delay(1.second)
