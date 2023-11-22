@@ -95,6 +95,29 @@ object ExternalSources {
     }
   }
 
+  private def consumerStream(
+    consumer: KafkaConsumer[String, String]
+  ): ZStream[Any, Throwable, ConsumerRecord[String, String]] =
+    ZStream.repeatZIOChunk(ZIO.attempt(consumer.poll(50.millis.asJava)).map(Chunk.fromJavaIterable(_)))
+
+  def pollConsumerZIO(topic: String)(f: ConsumerRecord[String, String] => Unit): RIO[Scope, Unit] = {
+    val props = new ju.Properties
+    (for {
+      _ <- ZIO.attempt(props.put("bootstrap.server", "localhost:9092")).orDie
+      _ <- ZIO.attempt(props.put("group.id", "streams")).orDie
+      _ <- ZIO.attempt(props.put("auto.offset.reset", "earliest")).orDie
+    } yield ()) *>
+      (
+        ZIO
+          .acquireRelease(
+            ZIO.succeed(new KafkaConsumer[String, String](props, new StringDeserializer, new StringDeserializer))
+          )(consumer => ZIO.attempt(consumer.close()).orDie)
+        )
+        .tap(consumer => ZIO.attempt(consumer.subscribe(List(topic).asJava)))
+        .flatMap(consumerStream(_).mapZIO(record => ZIO.attempt(f(record))).runDrain)
+
+  }
+
   // 3. Convert this function, which enumerates keys in an S3 bucket, to use ZStream and
   // ZManaged. Bonus points for using S3AsyncClient instead.
   // Type: Unbounded, stateful iteration
@@ -117,6 +140,36 @@ object ExternalSources {
     }
 
     listFilesToken(Chunk.empty, None)
+  }
+
+  def listFilesZIO(bucket: String, prefix: String): Task[Chunk[S3Object]] = {
+
+    def listFilesChunk(bucket: String, prefix: String, client: S3Client)(
+      token: Option[String]
+    ): Task[(Chunk[S3Object], Option[Option[String]])] =
+      for {
+        reqBuilder  <- ZIO.attempt(ListObjectsV2Request.builder().bucket(bucket).prefix(prefix))
+        builder     = token.fold(reqBuilder)(token => reqBuilder.continuationToken(token))
+        req         <- ZIO.succeed(builder.build())
+        resp        <- ZIO.attemptBlocking(client.listObjectsV2(req))
+        data        = Chunk.fromIterable(resp.contents().asScala)
+        cond        = resp.isTruncated()
+        newTokenOpt = if (cond) Some(Some(resp.nextContinuationToken())) else None
+      } yield (data, newTokenOpt)
+
+    for {
+      client <- ZIO.attempt(
+                 S3Client
+                   .builder()
+                   .credentialsProvider(
+                     StaticCredentialsProvider.create(AwsBasicCredentials.create("minio", "minio123"))
+                   )
+                   .endpointOverride(URI.create("http://localhost:9000"))
+                   .build()
+               )
+
+      s3objects <- ZStream.paginateChunkZIO(Option.empty[String])(listFilesChunk(bucket, prefix, client)).runCollect
+    } yield s3objects
   }
 
   // 4. Convert this push-based mechanism into a stream. Hint: you'll need a queue.

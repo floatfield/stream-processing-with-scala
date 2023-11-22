@@ -10,7 +10,7 @@ import java.io.FileInputStream
 import java.io.IOException
 import java.io.FileReader
 
-object Resources {
+object Resources extends ZIOAppDefault {
   // Resource management is an important part of stream processing. Resources can be
   // opened and closed throughout the stream's lifecycle, and most importantly,
   // need to be kept open for precisely as long as they are required for processing
@@ -176,6 +176,17 @@ object FileIO {
           Files.copy(Path.of(source, sourceFile.toString), Path.of(dest, sourceFile.toString))
         )
       )
+
+  override def run =
+    for {
+      source <- System
+                 .env("SOURCE")
+                 .flatMap(ZIO.fromOption(_).orElseFail(new Exception("no source")))
+      dest <- System
+               .env("DEST")
+               .flatMap(ZIO.fromOption(_).orElseFail(new Exception("no dest")))
+      _ <- synchronize(source, dest).runDrain
+    } yield ()
 
 }
 
