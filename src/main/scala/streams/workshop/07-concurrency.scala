@@ -3,13 +3,14 @@ package streams.workshop
 import zio.stream._
 import java.nio.file.Path
 import scala.io.Source
+import java.io.FileReader
 import zio._
 
 object ControlFlow {
   // 1. Write a stream that reads bytes from one file,
   // then prints "Done reading 1", then reads another bytes
   //z/ from another file.
-  def bytesFromHereAndThere(here: Path, bytesAmount: Int): ZStream[Console, Throwable, Char] =
+  def bytesFromHereAndThere(here: Path, bytesAmount: Int): ZStream[Any, Throwable, Char] =
     ZStream
       .acquireReleaseWith(ZIO.succeed(Source.fromFile(here.toAbsolutePath.toFile)))(fr => ZIO.succeed(fr.close()))
       .flatMap(fr =>
@@ -24,6 +25,11 @@ object ControlFlow {
       .flattenChunks
       .tap(c => Console.print(c.toString))
 
+  val realBytesFromHereAndThere: ZStream[Any, Throwable, Char] =
+    bytesFromHereAndThere(Path.of("some.txt"), 1024) ++
+      ZStream.fromZIO(Console.printLine("Done reading 1")).drain ++
+      bytesFromHereAndThere(Path.of("there.txt"), 1024)
+
   // 2. What would be the difference in output between these two streams?
   val output1 =
     ZStream("Hello", "World").tap(Console.printLine(_)).drain ++
@@ -37,7 +43,20 @@ object ControlFlow {
   // and print it out. Once done printing it out, log the file name in a `Ref` along with
   // its character count. Once the stream is completed, print out the all the files and
   // counts.
-  val read4Paths: ZStream[???, ???, ???] = ???
+  case class FileSummary(name: String, count: Long)
+  val read4Paths: ZStream[Any, Throwable, FileSummary] = for {
+    path             <- ZStream.fromZIO(Console.readLine).take(4)
+    fileStreamReader = new FileReader(path)
+    summary <- ZStream.fromZIO(
+                ZStream.fromReader(fileStreamReader).tap(Console.print(_)).runCount.map(FileSummary(path, _))
+              )
+
+  } yield summary
+
+  val eff: Task[Unit] = for {
+    summaries <- read4Paths.runCollect
+    _         <- ZIO.foreach(summaries)(Console.printLine(_))
+  } yield ()
 }
 
 object StreamErrorHandling {
