@@ -7,11 +7,20 @@ import zio.Random
 
 object AccumulatingMaps {
   // 1. Compute a running sum of this infinite stream using mapAccum.
-  val numbers = ZStream.iterate(0)(_ + 1)
+  val numbers = ZStream.iterate(0)(_ + 1).mapAccum(0)((sum, next) => (sum + next, sum + next))
 
   // 2. Use mapAccum to pattern match on the stream and group consecutive
   // rising numbers.
-  val risingNumbers = ZStream.repeatZIO(Random.nextIntBetween(0, 21)) ?
+  val risingNumbers = ZStream
+    .repeatZIO(Random.nextIntBetween(0, 21))
+    .mapAccum(Chunk[Int]()) { (chunk, next) =>
+      if (chunk.isEmpty) (Chunk(next), None)
+      else if (chunk.int(chunk.size - 1) <= next) (chunk.appended(next), None)
+      else (Chunk(next), Some(chunk))
+    }
+    .collectSome
+    .tap(chunk => Console.printLine(chunk.toString()))
+    .flattenChunks
 
   // 3. Using mapAccumM, write a windowed aggregation function. Sum the
   // incoming elements into windows of N seconds.
@@ -59,7 +68,11 @@ object Transduction {
     def make: Database = data => ZIO.attempt(println(s"Writing ${data}")).delay(1.second)
   }
 
-  val records = recordStream(Schedule.forever) ?
+  val batcher = ZSink.collectAllToMapN[Nothing, String, Record](n = 2)()((_, r2) => r2)
+
+  val records: ZStream[Any, Nothing, Map[String, Record]] =
+    recordStream(Schedule.forever)
+      .transduce(batcher)
 
   // 2. Group the `records` stream according to their cost - the value of data - with
   // up to 32 units in total in each group. Use ZTransducer.foldWeighted.
@@ -68,7 +81,7 @@ object Transduction {
   // 3. Create a composite transducer that operates on bytes; it should
   // decode the data to UTF8, split to lines, and group the lines into maps of lists
   // on their first letter, with up to 5 letters in every map.
-  val transducer: ZTransducer[Any, Nothing, Byte, Map[Char, List[String]]] = ???
+  val transducer: ZPipeline[Any, Nothing, Byte, Map[Char, List[String]]] = ???
 
   // 4. Batch records in this stream into groups of up to 50 records for as long as
   // the database writing operator is busy.

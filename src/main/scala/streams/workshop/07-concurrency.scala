@@ -5,6 +5,7 @@ import java.nio.file.Path
 import scala.io.Source
 import java.io.FileReader
 import zio._
+import java.io.IOException
 
 object ControlFlow {
   // 1. Write a stream that reads bytes from one file,
@@ -117,18 +118,30 @@ object StreamErrorHandling {
 
 object Concurrency {
   // 1. Create a stream that prints every element from a queue.
-  val queuePrinter: ZStream[???, ???, ???] = ZStream.fromQueue(???) ?
+  val queuePrinter: ZStream[Any, IOException, String] =
+    ZStream
+      .fromZIO(
+        Queue
+          .bounded[String](10)
+      )
+      .flatMap(q => ZStream.repeat(q.offer("Hello")).drain ++ ZStream.fromQueue(q).tap(Console.printLine(_)))
 
   // 2. Run the queuePrinter stream in one fiber, and feed it elements
   // from another fiber. The latter fiber should run a stream that reads
   // lines from the user.
-  val queuePipeline: ??? = ???
+  val queuePipeline: ZIO[Any, IOException, Unit] =
+    for {
+      queue        <- Queue.bounded[String](10)
+      readerFiber  <- Console.readLine.flatMap(queue.offer(_)).fork
+      printerFiber <- ZStream.fromQueue(queue).tap(Console.printLine(_)).runDrain.fork
+      _            <- Fiber.awaitAll(List(printerFiber, readerFiber))
+    } yield ()
 
   // 3. Introduce the ability to signal end-of-stream on the queue pipeline.
-  val queuePipelineWithEOS: ??? = ???
+  val queuePipelineWithEOS: ??? = queuePrinter.collectWhileSome
 
   // 4. Introduce the ability to signal errors on the queue pipeline.
-  val queuePipelineWithEOSAndErrors: ??? = ???
+  val queuePipelineWithEOSAndErrors: ??? = queuePrinter.collectWhileZIO()
 
   // 5. Combine the line reading stream with the line printing stream using
   // ZStream#drainFork.
