@@ -63,13 +63,15 @@ object ControlFlow {
 object StreamErrorHandling {
   // 1. Modify this stream, which is under our control, to survive transient exceptions.
   trait TransientException { self: Exception => }
-  def query: RIO[Random, Int] = Random.nextIntBetween(0, 11).flatMap { n =>
+  def query: Task[Int] = Random.nextIntBetween(0, 11).flatMap { n =>
     if (n < 2) ZIO.fail(new RuntimeException("Unrecoverable"))
     else if (n < 6) ZIO.fail(new RuntimeException("recoverable") with TransientException)
     else ZIO.succeed(n)
   }
 
-  val queryResults: ZStream[Random, Throwable, Int] = ZStream.repeatZIO(query) ?
+  val queryResults: ZStream[Any, Throwable, Int] = ZStream.repeatZIO(query).catchSome {
+    case _: TransientException => ZStream.fromZIO(Console.printLine("tranient")).drain
+  }
 
   // 2. Apply retries to the transformation applied during this stream.
   type Lookup = Lookup.Service
@@ -87,37 +89,57 @@ object StreamErrorHandling {
       }
   }
 
-  val queryResultsTransformed: ZStream[Random with Lookup, Throwable, Int] =
-    ZStream.repeatZIO(query).mapZIO(i => Lookup.lookup(i).map((i, _))) ?
+  val queryResultsTransformed: ZStream[Lookup, Throwable, (Int, String)] =
+    ZStream
+      .repeatZIO(query)
+      .mapZIO(i => Lookup.lookup(i).map((i, _)))
+      .retry(Schedule.fixed(50.millis))
 
   // 3. Switch to another stream once the source fails in this stream.
-  val failover: ZStream[Any, ???, ???] =
-    ZStream(ZIO.succeed(1), ZIO.fail("Boom")).mapZIO(identity) ?
+  val failover: ZStream[Any, String, Int] =
+    ZStream(ZIO.succeed(1), ZIO.fail("Boom")).mapZIO(identity).orElse(ZStream.succeed(42))
 
   // 4. Do the same, but when the source fails, print out the failure and switch
   // to the stream specified in the failure.
   case class UpstreamFailure[R, E, A](reason: String, backup: ZStream[R, E, A])
-  val failover2: ZStream[Any, ???, ???] =
-    ZStream(ZIO.succeed(1), ZIO.fail(UpstreamFailure("Malfunction", ZStream(2)))) ?
+  val failover2: ZStream[Any, Nothing, Int] =
+    ZStream(ZIO.succeed(1), ZIO.fail(UpstreamFailure("Malfunction", ZStream(2)))).mapZIO(identity).catchAll {
+      case UpstreamFailure(cause, backup) => ZStream.fromZIO(Console.printLine(cause).orDie).drain ++ backup
+    }
 
   // 5. Implement a simple retry combinator that waits for the specified duration
   // between attempts.
-  def retryStream[R, E, A](stream: ZStream[R, E, A], interval: Duration): ZStream[???, ???, ???] = ???
+
+  def retryStream[R, E, A](stream: ZStream[R, E, A], interval: Duration): ZStream[R, E, A] =
+    stream.retry(Schedule.fixed(interval))
 
   // 6. Measure the memory usage of this stream:
   val alwaysFailing = retryStream(ZStream.fail("Boom"), 1.millis)
 
   // 7. Surface typed errors as value-level errors in this stream using `either`:
-  val eithers = ZStream(ZIO.succeed(1), ZIO.fail("Boom")) ?
+  val eithers = ZStream(ZIO.succeed(1), ZIO.fail("Boom")).mapZIO(identity).either
 
   // 8. Use catchAll to restart this stream, without re-acquiring the resource.
   val subsection = ZStream
     .acquireReleaseWith(Console.printLine("Acquiring"))(_ => Console.printLine("Releasing").orDie)
-    .flatMap(_ => ZStream(ZIO.succeed(1), ZIO.fail("Boom")))
+    .flatMap { _ =>
+      val s = ZStream(ZIO.succeed(1), ZIO.fail("Boom")).mapZIO(identity)
+      s.catchAll(_ => s) // check orElse in console (and rabbit-mq)
+    }
 }
 
 object Concurrency {
   // 1. Create a stream that prints every element from a queue.
+
+  def s(queue: Queue[String]): ZStream[Any, Throwable, String] = ???
+
+  for {
+    q <- Queue.bounded[String](10)
+    f <- (q.offer("Hello").repeat(Schedule.recurs(5)) *> ZIO.sleep(500.millis)).fork
+    _ <- s(q).runDrain
+    _ <- f.join
+  } yield ()
+
   val queuePrinter: ZStream[Any, IOException, String] =
     ZStream
       .fromZIO(
@@ -131,21 +153,48 @@ object Concurrency {
   // lines from the user.
   val queuePipeline: ZIO[Any, IOException, Unit] =
     for {
-      queue        <- Queue.bounded[String](10)
+      queue <- Queue.bounded[String](10)
+      // f <- ZStream.fromZIO(Console.readLine).take(10).tap(queue.offer(_)).runDrain.fork
       readerFiber  <- Console.readLine.flatMap(queue.offer(_)).fork
       printerFiber <- ZStream.fromQueue(queue).tap(Console.printLine(_)).runDrain.fork
       _            <- Fiber.awaitAll(List(printerFiber, readerFiber))
     } yield ()
 
   // 3. Introduce the ability to signal end-of-stream on the queue pipeline.
-  val queuePipelineWithEOS: ??? = queuePrinter.collectWhileSome
-
+  val queuePipelineWithEOS =
+    for {
+      queue <- Queue.bounded[Option[String]](10)
+      // f <- ZStream.fromZIO(Console.readLine).take(10).tap(queue.offer(_)).runDrain.fork
+      readerFiber  <- Console.readLine.flatMap(x => queue.offer(Some(x))).fork
+      printerFiber <- ZStream.fromQueue(queue).collectWhileSome.tap(Console.printLine(_)).runDrain.fork
+      _            <- Fiber.awaitAll(List(printerFiber, readerFiber))
+    } yield ()
   // 4. Introduce the ability to signal errors on the queue pipeline.
-  val queuePipelineWithEOSAndErrors: ??? = queuePrinter.collectWhileZIO()
+  val queuePipelineWithEOSAndErrors =
+    for {
+      queue <- Queue.bounded[Either[String, Option[String]]](10)
+      // f <- ZStream.fromZIO(Console.readLine).take(10).tap(queue.offer(_)).runDrain.fork
+      readerFiber <- Console.readLine.flatMap(x => queue.offer(Right(Some(x)))).fork
+      printerFiber <- ZStream
+                       .fromQueue(queue)
+                       .collectWhileZIO {
+                         case Right(Some(str)) => ZIO.succeed(str)
+                         case Left(err)        => ZIO.fail(err)
+                       }
+                       .tap(Console.printLine(_))
+                       .runDrain
+                       .fork
+      _ <- Fiber.awaitAll(List(printerFiber, readerFiber))
+    } yield ()
 
   // 5. Combine the line reading stream with the line printing stream using
   // ZStream#drainFork.
-  val backgroundDraining: ??? = ???
+
+  def reader(q: Queue[String]) = ZStream.fromZIO(Console.readLine).take(10).tap(q.offer(_))
+  val backgroundDraining: ZStream[Any, IOException, String] = for {
+    q <- ZStream.fromZIO(Queue.bounded[String](10))
+    x <- ZStream.fromQueue(q).drainFork(reader(q)).tap(Console.printLine(_))
+  } yield x
 
   // 6. Prove to yourself that drainFork terminates the background stream
   // when the foreground ends by:
