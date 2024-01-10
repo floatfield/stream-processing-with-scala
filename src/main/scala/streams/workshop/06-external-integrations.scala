@@ -18,7 +18,6 @@ import software.amazon.awssdk.services.s3.model.S3Object
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials
 import java.net.URI
-import scala.runtime.LazyUnit
 
 object ExternalSources {
   // 1. Refactor this function, which drains a java.sql.ResultSet,
@@ -229,18 +228,30 @@ object ExternalSources {
     }
 
   // 5. Convert this Reactive Streams-based publisher to a ZStream.
-  val publisher = ???
+  val publisher =
+    ZStream
+      .acquireReleaseWith(ZIO.attempt(RabbitMQ.make))(rabbit => ZIO.succeed(rabbit.shutdown()))
+      .flatMap(messageStream)
 
   trait Rabbit {
     def subscribe: ZStream[Any, Throwable, Message]
     def shutdown: UIO[Unit]
   }
 
-  for {
+  object Rabbit {
+
+    def make: Rabbit = new Rabbit {
+
+      def subscribe: ZStream[Any, Throwable, Message] = ???
+      def shutdown: UIO[Unit]                         = ???
+    }
+  }
+
+  /* for {
     rabbit <- Rabbit.make
     fiber  <- ZIO.forkAll(List.fill(5)(rabbit.subscribe.foreach(m => printLine(m))))
     _      <- ZIO.sleep(5.seconds)
     _      <- fiber.interrupt
-  } yeild()
+  } yeild() */
 
 }

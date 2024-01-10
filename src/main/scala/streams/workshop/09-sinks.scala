@@ -6,16 +6,21 @@ import org.apache.kafka.common.serialization.StringSerializer
 import org.apache.kafka.clients.producer.KafkaProducer
 import org.apache.kafka.clients.producer.ProducerRecord
 
+import java.nio.file.Path
+
 object Sinks {
   // 1. Extract the first element of this stream using runHead.
-  val head = ZStream.unwrap(Random.nextInt.map(ZStream.range(0, _))) ?
+  val head = ZStream.unwrap(Random.nextInt.map(ZStream.range(0, _))).runHead
 
   // 2. Extract the last element of this stream using runLast.
-  val last = ZStream.unwrap(Random.nextInt.map(ZStream.range(0, _))) ?
+  val last = ZStream.unwrap(Random.nextInt.map(ZStream.range(0, _))).runLast
 
   // 3. Parse the CSV file at the root of the repository into its header line
   // and a stream that represents the rest of the lines. Use `ZStream#peel`.
-  val peel = ZStream.fromFile(???) ?
+  val peel = ZStream
+    .fromPath(Path.of("DDOG.csv"))
+    .via(ZPipeline.utf8Decode >>> ZPipeline.splitLines)
+    .peel(ZSink.head[String])
 
   // 4. Transduce the bytes read from a file into lines and print them out;
   // sum the amount of bytes that were read from the file and print that out
