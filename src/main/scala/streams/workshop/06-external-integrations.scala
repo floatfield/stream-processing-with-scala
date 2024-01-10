@@ -236,20 +236,22 @@ object ExternalSources {
   trait Rabbit {
     def subscribe: ZStream[Any, Throwable, Message]
     def shutdown: UIO[Unit]
+    def push(message: Message): UIO[Unit]
   }
 
   object Rabbit {
 
     def make: Rabbit = new Rabbit {
-
       def subscribe: ZStream[Any, Throwable, Message] = ???
       def shutdown: UIO[Unit]                         = ???
+      def push(message: Message): UIO[Unit]           = ???
     }
   }
 
   /* for {
     rabbit <- Rabbit.make
     fiber  <- ZIO.forkAll(List.fill(5)(rabbit.subscribe.foreach(m => printLine(m))))
+    _ <- ZIO.foreach(List(1,2,3))(x => rabbit.push(x))
     _      <- ZIO.sleep(5.seconds)
     _      <- fiber.interrupt
   } yeild() */

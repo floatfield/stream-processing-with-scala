@@ -3,7 +3,12 @@ package streams.workshop
 import zio._
 
 import zio.stream._
+import zio.duration._
 import zio.Random
+
+import java.time.Instant
+import java.time.{ Instant }
+import java.time.temporal.ChronoUnit
 
 object AccumulatingMaps {
   // 1. Compute a running sum of this infinite stream using mapAccum.
@@ -11,6 +16,9 @@ object AccumulatingMaps {
 
   // 2. Use mapAccum to pattern match on the stream and group consecutive
   // rising numbers.
+
+  // val risingNumbers = ZStream.repeatEffect(random.nextIntBetween(0, 21)) ?
+
   val risingNumbers = ZStream
     .repeatZIO(Random.nextIntBetween(0, 21))
     .mapAccum(Chunk[Int]()) { (chunk, next) =>
@@ -27,13 +35,37 @@ object AccumulatingMaps {
   case class Record(value: Long)
   case class Windowed(windowStart: Long, windowEnd: Long, sum: Long)
 
+  object Windowed {
+    def fromLong(t: Long, duration: Duration, sum: Long): Windowed =
+      Windowed(t, Instant.ofEpochMilli(t).plusMillis(duration.toMillis()).toEpochMilli(), sum)
+  }
+
   val records =
     ZStream.repeatZIOWithSchedule(
       Random.nextLongBetween(0, 100).map(Record(_)),
       Schedule.fixed(5.seconds).jittered
     )
 
-  def windowed[R, E, A](interval: Duration, records: ZStream[R, E, A])(f: A => Long): ZStream[R, E, Windowed] = ???
+  def windowed[R, E, A](interval: Duration, records: ZStream[R, E, A])(f: A => Long): ZStream[R, E, Windowed] =
+    ZStream
+      .fromZIO(Clock.currentTime(ChronoUnit.MILLIS))
+      .flatMap { time: Long =>
+        records
+          .mapAccumZIO(
+            Windowed.fromLong(time, interval, 0L)
+          ) { (window, record) =>
+            for {
+              t <- Clock.currentTime(ChronoUnit.MILLIS)
+              newWindow = if (t < window.windowEnd)
+                window.copy(sum = window.sum + f(record))
+              else Windowed.fromLong(t, interval, f(record))
+              producedValue = Some(window).filter(_ => t > window.windowEnd)
+            } yield (newWindow, producedValue)
+          }
+          .collectSome
+      }
+
+  // TODO: implement chained windows
 
   // 4. Implement state save/restore for your windowing stream.
   trait StateStore {
@@ -80,6 +112,8 @@ object Transduction {
     ZSink.foldWeighted(Chunk[Record]())((_: Chunk[Record], in: Record) => in.data, 32)(_.appended(_))
   }
 
+  // recordStream(Schedule.forever) ?
+
   // 3. Create a composite transducer that operates on bytes; it should
   // decode the data to UTF8, split to lines, and group the lines into maps of lists
   // on their first letter, with up to 5 letters in every map.
@@ -91,14 +125,12 @@ object Transduction {
 
   // 4. Batch records in this stream into groups of up to 50 records for as long as
   // the database writing operator is busy.
-  val batchWhileBusy = recordStream(Schedule.fixed(500.millis).jittered(0.25, 1.5))
-    .mapZIO(_ => Random.nextIntBetween(1, 5).flatMap(sleep => ZIO.sleep(sleep.seconds)))
+  val batchWhileBusy = recordStream(Schedule.fixed(500.millis).jittered(0.25, 1.5)).mapZIO(Database.writeBatch)
+  // recordStream(Schedule.fixed(500.millis).jittered(0.25, 1.5)).mapM(???)
 
   // 5. Perform adaptive batching in this stream: group the records in groups of
   // up to 50; as long as the resulting groups are under 40 records, the delay
   // between every batch emitted should increase by 50 millis.
   val adaptiveBatching = recordStream(Schedule.fixed(500.millis).jittered(0.25, 1.5))
-    .aggregateAsyncWithin(ZSink.collectAllN[Record](40), Schedule.exponential(50.milliseconds))
-    .mapZIO(_ => Random.nextIntBetween(1, 5).flatMap(sleep => ZIO.sleep(sleep.seconds)))
 
 }
