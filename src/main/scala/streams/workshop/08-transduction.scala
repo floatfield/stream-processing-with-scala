@@ -3,11 +3,11 @@ package streams.workshop
 import zio._
 
 import zio.stream._
-import zio.duration._
 import zio.Random
 
 import java.time.Instant
 import java.time.temporal.ChronoUnit
+import java.time.OffsetDateTime
 
 object AccumulatingMaps {
   // 1. Compute a running sum of this infinite stream using mapAccum.
@@ -77,7 +77,7 @@ object AccumulatingMaps {
   ): ZStream[R, E, Windowed] = ???
 }
 
-object Transduction {
+object Transduction extends ZIOAppDefault {
   case class Record(key: String, data: Long)
   def recordStream[R](schedule: Schedule[R, Any, Any]) =
     ZStream
@@ -127,7 +127,7 @@ object Transduction {
 
   def batchWhileBusy(database: Database): ZStream[Any, Throwable, Unit] =
     recordStream(Schedule.fixed(500.millis).jittered(0.25, 1.5))
-      .transduce(batcher50)
+      .aggregateAsync(batcher50)
       .mapZIO(database.writeBatch)
 
   batchWhileBusy(Database.make).runDrain
@@ -142,7 +142,33 @@ object Transduction {
   // def scheduleWith[R1 <: R, E1 >: E, B, C](
   //   schedule: => Schedule[R1, A, B]
   // )(f: A => C, g: B => C)
+
+  val countSchedule: Schedule[Any, Option[Chunk[Record]], Int] =
+    Schedule.fromFunction[Option[Chunk[Record]], Int](chunkOpt => chunkOpt.fold(0)(_.length))
+
+  //f: (State, Out, Decision) => URIO[Env1, Either[Out2, (Out2, Interval)]]
+
+  val foo = countSchedule
+    .modifyDelay((len, dura) => if (len < 40) dura + 50.millis else dura)
+    .reconsiderZIO((state, out, desicion) => Console.printLine((state, out, desicion)).orDie.as(Left(out)))
+
+  val bar: Schedule.WithState[Duration, Any, Option[Chunk[Record]], Unit] =
+    new Schedule[Any, Option[Chunk[Record]], Unit] {
+      override type State = zio.Duration
+      override final val initial: State = 0.millis
+
+      override final def step(now: OffsetDateTime, in: Option[Chunk[Record]], state: State)(
+        implicit
+        trace: Trace
+      ): ZIO[Any, Nothing, (State, Unit, Schedule.Decision)] = {
+        val newState = if (in.fold[Int](0)(_.length) < 40) state + 10.millis else state
+        ZIO.succeed((newState, (), Schedule.Decision.Continue(Schedule.Interval.after(now))))
+      }
+    }
+
   val adaptiveBatching = recordStream(Schedule.fixed(500.millis).jittered(0.25, 1.5))
-    .transduce(ZSink.collectAllN[Record](50))
-    .scheduleWith(Schedule.linear(50.millis) *> Schedule.recurs(10))(identity, Schedule.fromFunction(_))
+    .aggregateAsyncWithin(sink = ZSink.collectAllN[Record](50), schedule = foo)
+    .tap(ch => ZIO.sleep(10.seconds) *> Console.printLine(ch.length))
+
+  override def run: ZIO[Environment with ZIOAppArgs with Scope, Any, Any] = adaptiveBatching.runDrain
 }
