@@ -33,9 +33,7 @@ object Sinks {
   def producer: ZStream[Any, Throwable, KafkaProducer[String, String]] = {
     val props = new java.util.Properties
     props.put("bootstrap.server", "localhost:9092")
-    ZStream.acquireReleaseWith(ZIO.attempt(new KafkaProducer(props, new StringSerializer, new StringSerializer)))(
-      kafka => ZIO.attempt(kafka.close()).orDie
-    )
+    Scope.acquireReleaseAttemptWith(new KafkaProducer(props, new StringSerializer, new StringSerializer))(_.close())
   }
 
   def toProducerRecord(topic: String, value: String): ProducerRecord[String, String] =
