@@ -162,7 +162,7 @@ object Transduction extends ZIOAppDefault {
         trace: Trace
       ): ZIO[Any, Nothing, (State, Unit, Schedule.Decision)] = {
         val newState = if (in.fold[Int](0)(_.length) < 40) state + 10.millis else state
-        ZIO.succeed((newState, (), Schedule.Decision.Continue(Schedule.Interval.after(now))))
+        ZIO.succeed((newState, (), Schedule.Decision.Continue(Schedule.Interval.after(now)))) // <-- подумать
       }
     }
 
