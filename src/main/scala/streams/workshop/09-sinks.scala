@@ -30,7 +30,7 @@ object Sinks {
 
   // 5. Use ZSink.managed to wrap a Kafka producer and write every line
   // from a file to a topic.
-  def producer: ZManaged[Any, Throwable, KafkaProducer[String, String]] = {
+  def producer: ZStream[Any, Throwable, KafkaProducer[String, String]] = {
     val props = new java.util.Properties
     props.put("bootstrap.server", "localhost:9092")
     Scope.acquireReleaseAttemptWith(new KafkaProducer(props, new StringSerializer, new StringSerializer))(_.close())

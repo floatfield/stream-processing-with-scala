@@ -237,11 +237,14 @@ object ExternalSources {
     def subscribe: ZStream[Any, Throwable, Message]
     def shutdown: UIO[Unit]
     def push(message: Message): UIO[Unit]
+
   }
 
   object Rabbit {
 
     def make: Rabbit = new Rabbit {
+      val queue                                       = Ref.make(Seq.empty)
+      val shutdownMarker                              = SubscriptionRef.make(false)
       def subscribe: ZStream[Any, Throwable, Message] = ???
       def shutdown: UIO[Unit]                         = ???
       def push(message: Message): UIO[Unit]           = ???
