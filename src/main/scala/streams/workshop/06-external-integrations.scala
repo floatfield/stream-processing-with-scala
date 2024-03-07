@@ -241,18 +241,17 @@ object ExternalSources {
   }
 
   object Rabbit {
-
+    import zio.stm._
     def make: Rabbit = new Rabbit {
-      val queue                                       = Ref.make(Seq.empty)
-      val shutdownMarker                              = SubscriptionRef.make(false)
-      def subscribe: ZStream[Any, Throwable, Message] = ???
-      def shutdown: UIO[Unit]                         = ???
-      def push(message: Message): UIO[Unit]           = ???
+      val queue: STM[Nothing, TQueue[Message]]        = TQueue.bounded[Message](1024)
+      def subscribe: ZStream[Any, Throwable, Message] = queue.offer.commit
+      def shutdown: UIO[Unit]                         = ZIO.die(new RuntimeException("frfr"))
+      def push(message: Message): UIO[Unit]           = queue.offer(message)
     }
   }
 
   /* for {
-    rabbit <- Rabbit.make
+    rabbit <- Rabbit.makef
     fiber  <- ZIO.forkAll(List.fill(5)(rabbit.subscribe.foreach(m => printLine(m))))
     _ <- ZIO.foreach(List(1,2,3))(x => rabbit.push(x))
     _      <- ZIO.sleep(5.seconds)
