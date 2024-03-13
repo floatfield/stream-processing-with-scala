@@ -241,12 +241,13 @@ object ExternalSources {
   }
 
   object Rabbit {
-    def make: Rabbit = new Rabbit {
-      val queue: UIO[Queue[Message]]        = Queue.bounded[Message](1024)
-      def subscribe: Task[Message]          = queue.map(_.offer)
-      def shutdown: UIO[Unit]               = ZIO.die(new RuntimeException("frfr"))
-      def push(message: Message): UIO[Unit] = queue.map(_.offer)
-
+    def make: UIO[Rabbit] = Queue.bounded[Message](1024).map { queue =>
+      new Rabbit {
+        def subscribe: ZStream[Any, Throwable, Message] = ZStream.fromQueue(queue)
+        def shutdown: UIO[Unit]                         = queue.shutdown
+        def push(message: Message): UIO[Unit]           = queue.offer(message).ignore
+      }
+    }
   }
 
   /* for {
